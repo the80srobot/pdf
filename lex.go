@@ -7,6 +7,7 @@
 package pdf
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"strconv"
@@ -118,6 +119,10 @@ func (b *buffer) unreadByte() {
 	if b.pos > 0 {
 		b.pos--
 	}
+}
+
+func (b *buffer) unreadBytes(n int) {
+	b.pos -= n
 }
 
 func (b *buffer) unreadToken(t token) {
@@ -306,16 +311,37 @@ func (b *buffer) readName() token {
 }
 
 func (b *buffer) readKeyword() token {
+	// The keyword could be a base85 encoded blob, which we only know by reading
+	// until the first whitespace character and checking if the last two bytes
+	// are '~>' (yes, postscript is that stupid).
+
 	tmp := b.tmp[:0]
+	firstDelim := -1
+	idx := 0
 	for {
 		c := b.readByte()
-		if isDelim(c) || isSpace(c) {
+		if isSpace(c) {
 			b.unreadByte()
 			break
 		}
+		if isDelim(c) && firstDelim == -1 {
+			firstDelim = idx
+		}
 		tmp = append(tmp, c)
+		idx++
+	}
+
+	if len(tmp) > 2 && bytes.Equal(tmp[len(tmp)-2:], []byte("~>")) {
+		// Base85-encoded string.
+		return keyword(string(tmp))
+	}
+
+	if firstDelim >= 0 {
+		b.unreadBytes(len(tmp) - firstDelim)
+		tmp = tmp[:firstDelim]
 	}
 	b.tmp = tmp
+
 	s := string(tmp)
 	switch {
 	case s == "true":
